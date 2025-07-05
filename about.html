@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>AI Complaint Handler</title>
+  <title>About</title>
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -13,8 +13,8 @@
     <div class="nav-left">
       <button id="menuBtn">☰</button>
       <div class="dropdown" id="dropdownMenu">
-        <a href="#analysis">ANALYSIS</a>
-        <a href="#draft">DRAFT MAIL RESPONSE</a>
+        <a href="index.html#analysis">ANALYSIS</a>
+        <a href="index.html#draft">DRAFT MAIL RESPONSE</a>
       </div>
     </div>
     <nav>
@@ -24,31 +24,12 @@
     </nav>
   </header>
 
-  <section class="hero">
+  <main class="centered-page">
     <div class="hero-box">
-      <h1>SUMMARIZE. UNDERSTAND. RESPOND.</h1>
-      <p>Handle customer complaints in seconds using AI</p>
-      <button class="btn" onclick="document.getElementById('analyze').scrollIntoView({ behavior: 'smooth' })">
-        Get Started
-      </button>
+      <h1>ABOUT</h1>
+      <p>AI-Based Customer Complaint Summarizer and Responder is built to transform customer service using Generative AI. Powered by advanced language models like GPT-4, the tool analyzes lengthy customer complaints, generates clear summaries, and suggests polite, ready-to-use responses. Developed with Python, LangChain, and Streamlit, it helps support teams reduce workload, save time, and maintain consistent communication across industries like banking, e-commerce, and telecom. Trained on real-world complaint data, the system also uses basic sentiment analysis to better understand customer emotions.</p>
     </div>
-  </section>
-
-  <section class="input-section" id="analyze">
-    <p>Paste a customer complaint below.</p>
-    <textarea placeholder="Enter customer complaint..."></textarea>
-    <button class="btn">Analyze</button>
-  </section>
-
-  <section class="result-section" id="analysis">
-    <h2>Analysis</h2>
-    <div class="result-box">[ Analysis result will show here ]</div>
-  </section>
-
-  <section class="result-section" id="draft">
-    <h2>Draft Email Response</h2>
-    <div class="result-box">[ Draft response will show here ]</div>
-  </section>
+  </main>
 
   <footer>
     © 2025 AI Tools. Built for Internship project
