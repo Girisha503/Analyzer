@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>About</title>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <header>
+    <div class="nav-left">
+      <button id="menuBtn">☰</button>
+      <div class="dropdown" id="dropdownMenu">
+        <a href="index.html#analysis">ANALYSIS</a>
+        <a href="index.html#draft">DRAFT MAIL RESPONSE</a>
+      </div>
+    </div>
+    <nav>
+      <a href="index.html">HOME</a>
+      <a href="about.html">ABOUT</a>
+      <a href="contact.html">CONTACT</a>
+    </nav>
+  </header>
+
+  <main class="centered-page">
+    <div class="hero-box">
+      <h1>ABOUT</h1>
+      <p>AI-Based Customer Complaint Summarizer and Responder is built to transform customer service using Generative AI. Powered by advanced language models like GPT-4, the tool analyzes lengthy customer complaints, generates clear summaries, and suggests polite, ready-to-use responses. Developed with Python, LangChain, and Streamlit, it helps support teams reduce workload, save time, and maintain consistent communication across industries like banking, e-commerce, and telecom. Trained on real-world complaint data, the system also uses basic sentiment analysis to better understand customer emotions.</p>
+    </div>
+  </main>
+
+  <footer>
+    © 2025 AI Tools. Built for Internship project
+  </footer>
+
+  <script>
+    document.getElementById("menuBtn").addEventListener("click", () => {
+      const dropdown = document.getElementById("dropdownMenu");
+      dropdown.style.display = dropdown.style.display === "flex" ? "none" : "flex";
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,259 @@
+/* Global and font */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: 'Montserrat', sans-serif !important;
+}
+
+/* Body */
+body {
+  background: white;
+  color: black;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  scroll-behavior: smooth;
+}
+
+/* Header */
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  background: white;
+  border-bottom: 1px solid #eee;
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  flex-wrap: wrap;
+}
+
+.nav-left {
+  position: relative;
+}
+
+#menuBtn {
+  font-size: 26px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-weight: 700;
+  color: black;
+}
+
+.dropdown {
+  display: none;
+  position: absolute;
+  top: 40px;
+  left: 0;
+  background: black;
+  color: white;
+  padding: 10px;
+  border-radius: 5px;
+  flex-direction: column;
+}
+
+.dropdown a {
+  color: white;
+  text-decoration: none;
+  text-transform: uppercase;
+  font-weight: 700;
+  margin-bottom: 10px;
+  font-size: 16px;
+}
+
+nav a {
+  margin: 0 20px;
+  text-decoration: none;
+  color: black;
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 22px;
+}
+
+/* Hero Section */
+.hero {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 80vh; /* ⬅️ changed from 60vh to 100vh */
+}
+
+.hero-box {
+  background-color: #00c853;
+  padding: 40px;
+  border-radius: 30px;
+  text-align: center;
+  color: black;
+  max-width: 900px; /* ✅ limits width */
+  margin: 0 auto; /* ✅ centers it */
+}
+
+
+.hero-box h1 {
+  font-size: 32px;
+  font-weight: 700;
+}
+
+.hero-box p {
+  margin-top: 10px;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.btn {
+  background: black;
+  color: white;
+  border: none;
+  padding: 12px 25px;
+  border-radius: 999px;
+  margin-top: 20px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+/* Input Section */
+.input-section {
+  text-align: center;
+  padding: 60px 20px 40px; /* Increased top padding */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+
+textarea {
+  width: 60%;
+  height: 100px;
+  padding: 10px;
+  font-size: 16px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  resize: vertical;
+}
+
+/* Results */
+.result-section {
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.result-section h2 {
+  text-transform: uppercase;
+  font-weight: 700;
+  margin-bottom: 20px;
+  font-size: 24px;
+}
+
+.result-box {
+  width: 70%;
+  min-height: 150px;
+  background: #f1f1f1;
+  margin: 20px auto;
+  padding: 20px;
+  border-radius: 10px;
+  font-size: 16px;
+  color: #333;
+  text-align: left;
+}
+
+/* About Page */
+.centered-page {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 70vh;
+}
+
+.centered-page .hero-box {
+  background-color: #00c853;
+  padding: 40px;
+  border-radius: 30px;
+  text-align: center;
+  color: black;
+}
+
+/* Contact Page */
+.contact-section {
+  text-align: center;
+  padding: 40px 20px;
+  flex-grow: 1;
+}
+
+.contact-section h2 {
+  font-size: 28px;
+  text-transform: uppercase;
+  font-weight: 700;
+  margin-bottom: 30px;
+}
+
+.contact-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 30px;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.pill {
+  background: black;
+  color: white;
+  padding: 30px 50px;
+  border-radius: 999px;
+  font-weight: 700;
+  min-width: 220px;
+  height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  overflow: hidden;
+  text-align: center;
+  position: relative;
+}
+
+.pill::before {
+  content: "";
+  width: 24px;
+  aspect-ratio: 1 / 1;
+  background: green;
+  border-radius: 50%;
+  margin-right: 14px;
+  display: inline-block;
+}
+
+/* ✅ Pill Link Styling */
+.pill a {
+  color: white;
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 22px;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pill a:visited,
+.pill a:hover,
+.pill a:active {
+  color: white;
+  text-decoration: none;
+}
+
+/* Footer */
+footer {
+  background: black;
+  color: white;
+  text-align: center;
+  padding: 15px;
+  font-size: 14px;
+  margin-top: auto;
+  font-weight: 500;
+}
