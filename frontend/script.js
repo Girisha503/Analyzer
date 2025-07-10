@@ -37,7 +37,10 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       const data = await res.json();
-      resultBox.textContent = data.success ? data.summary : `Error: ${data.error || "Failed to summarize."}`;
+      resultBox.innerHTML = data.success
+      ? marked.parse(data.summary)
+      : `Error: ${data.error || "Failed to summarize."}`;
+
 
     } catch (err) {
       console.error(err);
