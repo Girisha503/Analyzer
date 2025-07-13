@@ -10,14 +10,10 @@ from typing import Dict, List, Optional
 import nltk
 import asyncio
 import time
-from urllib.error import URLError # Import URLError for more specific network errors
-
-# Download necessary NLTK data (run this once)
-# This block attempts to download 'averaged_perceptron_tagger' if not found.
-# It uses a general Exception catch for newer NLTK versions where DownloadError might not exist.
+from urllib.error import URLError 
 try:
     nltk.data.find('taggers/averaged_perceptron_tagger')
-except Exception as e: # Catching general Exception for robust handling across NLTK versions
+except Exception as e: 
     print(f"NLTK 'averaged_perceptron_tagger' not found locally. Attempting to download...")
     try:
         nltk.download('averaged_perceptron_tagger', quiet=True)
@@ -28,9 +24,7 @@ except Exception as e: # Catching general Exception for robust handling across N
     except Exception as download_err:
         print(f"An unexpected error occurred during NLTK download: {download_err}")
         print("Please ensure you have an active internet connection or try downloading manually using 'python -m nltk.downloader averaged_perceptron_tagger'")
-    # Note: If NLTK download fails, subsequent text analysis might be less effective or error out.
-
-# Load environment variables
+    
 load_dotenv()
 HF_TOKEN = os.getenv("HF_TOKEN")
 
@@ -341,59 +335,56 @@ def _call_hf_api_sync(url: str, headers: dict, payload: dict) -> Optional[dict]:
         return None
 
 async def extract_product_with_ai(text):
-    """Use multiple AI models to extract product information accurately, with refined fallback."""
+    """Use AI models to extract product information with minimal hard-coding."""
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     
-    # Early check for generic complaints without specific product mentions
-    text_lower = text.lower()
-    generic_indicators = [
-        "your product", "the product", "this product", "that product",
-        "your service", "the service", "this service", "that service",
-        "your company", "the company", "this company"
+    print(f"[Product Extraction] Processing text: {text[:100]}...")
+    
+    # Method 1: Use Question-Answering model with better questions
+    qa_url = "https://api-inference.huggingface.co/models/deepset/roberta-base-squad2"
+    
+    # Try multiple question formats to catch different ways products are mentioned
+    questions = [
+        "What product or item is the customer talking about?",
+        "What did the customer order or buy?",
+        "What item is being discussed in this message?",
+        "What is the main product mentioned?",
+        "What merchandise or goods is this about?"
     ]
     
-    # If text is very generic and short, return generic product
-    if (len(text.split()) < 10 and 
-        any(indicator in text_lower for indicator in generic_indicators) and
-        not any(specific in text_lower for specific in ["bag", "wallet", "phone", "laptop", "chair", "vase", "jewelry", "clothing"])):
-        print("[Product Extraction] Generic complaint detected, returning 'product'")
-        return "product"
+    best_answer = None
+    best_score = 0
     
-    # Method 1: Use Question-Answering model (most effective for direct product queries)
-    qa_url = "https://api-inference.huggingface.co/models/deepset/roberta-base-squad2"
-    qa_payload = {
-        "inputs": {
-            "question": "What specific product, item, or object is the complaint about?",
-            "context": text
+    for question in questions:
+        qa_payload = {
+            "inputs": {
+                "question": question,
+                "context": text
+            }
         }
-    }
-    start_time_qa = time.perf_counter()
-    qa_result = await asyncio.to_thread(_call_hf_api_sync, qa_url, headers, qa_payload)
-    end_time_qa = time.perf_counter()
-    print(f"[Product Extraction - QA] API call took {end_time_qa - start_time_qa:.2f} seconds")
-    
-    if qa_result and isinstance(qa_result, dict) and 'answer' in qa_result:
-        answer = qa_result['answer'].strip().lower()
-        confidence = qa_result.get('score', 0)
-        print(f"[Product Extraction - QA] Answer: '{answer}', Score: {confidence:.2f}")
         
-        # Enhanced generic term detection
-        generic_terms = [
-            'it', 'this', 'that', 'item', 'product', 'thing', 'service',
-            'your product', 'the product', 'this product', 'that product',
-            'your service', 'the service', 'this service', 'that service'
-        ]
+        start_time_qa = time.perf_counter()
+        qa_result = await asyncio.to_thread(_call_hf_api_sync, qa_url, headers, qa_payload)
+        end_time_qa = time.perf_counter()
+        print(f"[Product Extraction - QA] '{question}' took {end_time_qa - start_time_qa:.2f} seconds")
         
-        if confidence > 0.45 and len(answer) > 2 and len(answer) < 50:
-            # Check if answer is too generic
-            if answer not in generic_terms and not answer.startswith(('the ', 'a ', 'an ', 'your ', 'this ', 'that ')):
-                cleaned_answer = re.sub(r'^(my|the|a|an|your|this|that)\s+', '', answer).strip()
-                if cleaned_answer and cleaned_answer not in generic_terms:
-                    return cleaned_answer
-            elif confidence > 0.8:  # Only accept generic answers with very high confidence
-                return "product"
+        if qa_result and isinstance(qa_result, dict) and 'answer' in qa_result:
+            answer = qa_result['answer'].strip()
+            confidence = qa_result.get('score', 0)
+            print(f"[Product Extraction - QA] Q: '{question}' A: '{answer}', Score: {confidence:.2f}")
+            
+            if confidence > best_score and confidence > 0.1:  # Lower threshold to catch more
+                best_answer = answer
+                best_score = confidence
     
-    # Method 2: Use NER (Named Entity Recognition) for product extraction
+    # Process the best QA answer
+    if best_answer and best_score > 0.2:
+        cleaned_product = clean_product_name(best_answer)
+        if cleaned_product:
+            print(f"[Product Extraction - QA] Final answer: '{cleaned_product}'")
+            return cleaned_product
+    
+    # Method 2: Use NER to find product entities
     ner_url = "https://api-inference.huggingface.co/models/dbmdz/bert-large-cased-finetuned-conll03-english"
     start_time_ner = time.perf_counter()
     ner_result = await asyncio.to_thread(_call_hf_api_sync, ner_url, headers, {"inputs": text})
@@ -402,141 +393,561 @@ async def extract_product_with_ai(text):
 
     if ner_result and isinstance(ner_result, list):
         print(f"[Product Extraction - NER] Result: {ner_result}")
-        products = []
+        # Look for any named entities that could be products
         for entity in ner_result:
-            if entity.get('entity_group') == 'MISC' and entity.get('score', 0) > 0.7:
-                word = entity.get('word', '').replace('##', '').strip().lower()
-                if len(word) > 2 and word not in ['chain', 'item', 'product', 'service']:
-                    products.append(word)
-        if products:
-            return products[0]
+            if entity.get('score', 0) > 0.5:  # Lower threshold
+                word = entity.get('word', '').replace('##', '').strip()
+                cleaned_word = clean_product_name(word)
+                if cleaned_word and is_likely_product(cleaned_word):
+                    print(f"[Product Extraction - NER] Found: '{cleaned_word}'")
+                    return cleaned_word
     
-    # Method 3: Use zero-shot classification - IMPROVED with better threshold handling
-    candidate_labels = [
-        "bag", "wallet", "jewelry", "clothing", "electronic device", "furniture", "home decor", 
-        "book", "kitchen appliance", "beauty product", "sports equipment",
-        "toy", "automotive part", "office supplies", "food item",
-        "health product", "pet supplies", "tools", "garden supplies", "accessory",
-        "vase", "unspecified product or service"  # Added generic option
+    # Method 3: Smart noun extraction with product likelihood scoring
+    smart_noun_result = extract_smart_nouns(text)
+    if smart_noun_result:
+        print(f"[Product Extraction - Smart Nouns] Found: '{smart_noun_result}'")
+        return smart_noun_result
+    
+    # Method 4: Use text classification to identify if this is about a product
+    # and extract the most likely product noun
+    classification_result = await classify_and_extract_product(text, headers)
+    if classification_result:
+        print(f"[Product Extraction - Classification] Found: '{classification_result}'")
+        return classification_result
+    
+    # Final fallback
+    print("[Product Extraction] No product found, returning 'item'")
+    return "item"
+
+def is_likely_product(word):
+    """Determine if a word is likely to be a product using various heuristics."""
+    if not word or len(word) < 2:
+        return False
+    
+    # Non-product words that should be filtered out
+    non_product_indicators = {
+        'problem', 'issue', 'complaint', 'service', 'support', 'help', 'question',
+        'order', 'delivery', 'shipping', 'payment', 'refund', 'return', 'exchange',
+        'customer', 'company', 'store', 'shop', 'business', 'staff', 'employee',
+        'time', 'day', 'week', 'month', 'year', 'date', 'today', 'yesterday',
+        'tracking', 'warehouse', 'package', 'shipment', 'gift', 'birthday',
+        'number', 'email', 'phone', 'address', 'location', 'place', 'website',
+        'quality', 'condition', 'experience', 'situation', 'case', 'instance',
+        'price', 'cost', 'money', 'payment', 'bill', 'invoice', 'receipt'
+    }
+    
+    if word.lower() in non_product_indicators:
+        return False
+    
+    # Product indicators (things that make a word more likely to be a product)
+    product_indicators = {
+        # Common product suffixes
+        'suffixes': ['wear', 'ware', 'gear', 'set', 'kit', 'pack', 'case', 'cover', 'holder'],
+        # Common product prefixes
+        'prefixes': ['mini', 'micro', 'mega', 'ultra', 'super', 'pro', 'smart', 'auto'],
+        # Material indicators
+        'materials': ['leather', 'cotton', 'wool', 'silk', 'metal', 'plastic', 'wood', 'glass', 'ceramic'],
+        # Color indicators (often used with products)
+        'colors': ['black', 'white', 'red', 'blue', 'green', 'yellow', 'pink', 'purple', 'brown', 'gray', 'silver', 'gold']
+    }
+    
+    word_lower = word.lower()
+    
+    # Check for product indicators
+    for suffix in product_indicators['suffixes']:
+        if word_lower.endswith(suffix):
+            return True
+    
+    for prefix in product_indicators['prefixes']:
+        if word_lower.startswith(prefix):
+            return True
+    
+    # If it's a single common noun and not in non-product list, it's likely a product
+    if len(word.split()) == 1 and word.isalpha() and len(word) > 2:
+        return True
+    
+    return False
+
+def extract_smart_nouns(text):
+    """Extract nouns from text and score them by product likelihood."""
+    try:
+        import nltk
+        tokens = nltk.word_tokenize(text.lower())
+        tagged = nltk.pos_tag(tokens)
+        
+        # Get all nouns
+        nouns = [word for word, pos in tagged if pos.startswith('NN')]
+        print(f"[Smart Nouns] All nouns found: {nouns}")
+        
+        # Score each noun by likelihood of being a product
+        scored_nouns = []
+        for noun in nouns:
+            if is_likely_product(noun):
+                # Simple scoring based on position and context
+                score = 1.0
+                
+                # Boost score if it appears early in the text
+                if text.lower().find(noun) < len(text) * 0.3:
+                    score += 0.5
+                
+                # Boost score if it's mentioned with product-related words
+                product_context_words = ['ordered', 'bought', 'purchased', 'received', 'delivered', 'item', 'product']
+                for context_word in product_context_words:
+                    if context_word in text.lower():
+                        score += 0.3
+                        break
+                
+                scored_nouns.append((noun, score))
+        
+        # Sort by score and return the best candidate
+        scored_nouns.sort(key=lambda x: x[1], reverse=True)
+        print(f"[Smart Nouns] Scored nouns: {scored_nouns}")
+        
+        if scored_nouns:
+            best_noun = scored_nouns[0][0]
+            cleaned = clean_product_name(best_noun)
+            if cleaned:
+                return cleaned
+        
+    except Exception as e:
+        print(f"Error in smart noun extraction: {e}")
+    
+    return None
+
+async def classify_and_extract_product(text, headers):
+    """Use classification to determine if text is about a product and extract it."""
+    try:
+      
+        classification_url = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
+        
+        
+        classification_payload = {
+            "inputs": text,
+            "parameters": {
+                "candidate_labels": [
+                    "product complaint",
+                    "product inquiry", 
+                    "product order",
+                    "product delivery",
+                    "product issue",
+                    "general inquiry",
+                    "service request"
+                ]
+            }
+        }
+        
+        classification_result = await asyncio.to_thread(_call_hf_api_sync, classification_url, headers, classification_payload)
+        
+        if classification_result and 'labels' in classification_result:
+            top_label = classification_result['labels'][0]
+            confidence = classification_result['scores'][0]
+            
+            print(f"[Classification] Text classified as: '{top_label}' (confidence: {confidence:.2f})")
+            
+            
+            if confidence > 0.3 and 'product' in top_label:
+                
+                qa_url = "https://api-inference.huggingface.co/models/deepset/roberta-base-squad2"
+                qa_payload = {
+                    "inputs": {
+                        "question": "What specific product, item, or merchandise is this text about?",
+                        "context": text
+                    }
+                }
+                
+                qa_result = await asyncio.to_thread(_call_hf_api_sync, qa_url, headers, qa_payload)
+                
+                if qa_result and 'answer' in qa_result:
+                    answer = qa_result['answer'].strip()
+                    qa_confidence = qa_result.get('score', 0)
+                    
+                    if qa_confidence > 0.1:
+                        cleaned_answer = clean_product_name(answer)
+                        if cleaned_answer:
+                            return cleaned_answer
+        
+    except Exception as e:
+        print(f"Error in classification and extraction: {e}")
+    
+    return None
+
+def clean_product_name(raw_name):
+    """Clean and validate product name - more permissive version."""
+    if not raw_name:
+        return None
+    
+    
+    cleaned = raw_name.lower().strip()
+    
+    
+    prefixes_to_remove = [
+        'the ', 'a ', 'an ', 'my ', 'your ', 'his ', 'her ', 'its ', 'our ', 'their ',
+        'this ', 'that ', 'these ', 'those ', 'some ', 'any ', 'each ', 'every ',
+        'i ordered ', 'i bought ', 'i purchased ', 'i received ', 'i got ',
+        'customer ordered ', 'customer bought ', 'customer purchased ',
+        'complaint about ', 'problem with ', 'issue with ', 'trouble with '
     ]
-    classification_url = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
-    classification_payload = {
-        "inputs": text,
-        "parameters": {
-            "candidate_labels": candidate_labels
-        }
+    
+    for prefix in prefixes_to_remove:
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):].strip()
+            break
+    
+    
+    suffixes_to_remove = [
+        ' that i ordered', ' that i bought', ' that i purchased',
+        ' from your store', ' from your company', ' from you',
+        ' is broken', ' is damaged', ' is defective', ' is wrong'
+    ]
+    
+    for suffix in suffixes_to_remove:
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[:-len(suffix)].strip()
+            break
+    
+    
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    cleaned = re.sub(r'[^\w\s-]', '', cleaned)
+    cleaned = cleaned.strip()
+    
+    
+    obvious_non_products = {
+        'it', 'this', 'that', 'order', 'delivery', 'shipment', 'package',
+        'customer', 'complaint', 'problem', 'issue', 'trouble', 'concern',
+        'service', 'support', 'help', 'question', 'inquiry', 'request',
+        'company', 'store', 'shop', 'business', 'website', 'email',
+        'tracking', 'warehouse', 'number', 'gift', 'birthday'
     }
-    start_time_classification = time.perf_counter()
-    classification_result = await asyncio.to_thread(_call_hf_api_sync, classification_url, headers, classification_payload)
-    end_time_classification = time.perf_counter()
-    print(f"[Product Extraction - Classification] API call took {end_time_classification - start_time_classification:.2f} seconds")
-
-    if classification_result and 'labels' in classification_result and len(classification_result['labels']) > 0:
-        print(f"[Product Extraction - Classification] Result: {classification_result}")
-        top_category = classification_result['labels'][0]
-        confidence = classification_result['scores'][0]
-        
-        # IMPROVED: Higher threshold for generic complaints and better handling
-        if confidence > 0.7:  # Increased threshold
-            if top_category == "unspecified product or service":
-                return "product"
-            else:
-                specific_item = await extract_specific_item_from_category(text, top_category, headers)
-                if specific_item:
-                    return specific_item
-                else:
-                    return top_category.replace(' item', '').replace(' device', '').replace(' a ', '').replace(' an ', '')
-        elif confidence > 0.5:
-            # Medium confidence - check if it's the generic category
-            if top_category == "unspecified product or service":
-                return "product"
-            # Otherwise, be more cautious and return generic
-            else:
-                return "product"
     
-    # Method 4: Use text summarization - IMPROVED with better filtering
-    summary_url = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
-    product_focused_text = f"The customer's complaint is specifically about: {text}. What is the main item or product they are referring to?"
-    summary_payload = {
-        "inputs": product_focused_text,
-        "parameters": {
-            "min_length": 5,
-            "max_length": 20,
-            "do_sample": True,
-            "temperature": 0.3
-        }
-    }
-    start_time_summary = time.perf_counter()
-    summary_result = await asyncio.to_thread(_call_hf_api_sync, summary_url, headers, summary_payload)
-    end_time_summary = time.perf_counter()
-    print(f"[Product Extraction - Summary] API call took {end_time_summary - start_time_summary:.2f} seconds")
-
-    if summary_result and isinstance(summary_result, list) and len(summary_result) > 0:
-        print(f"[Product Extraction - Summary] Result: {summary_result}")
-        summary = summary_result[0].get('summary_text', '').lower()
-        cleaned_summary = re.sub(r'^(the|a|an|your|this|that)\s+', '', summary).strip()
-        
-        # Better filtering for generic responses
-        generic_summary_terms = ['item', 'product', 'service', 'complaint', 'issue', 'customer', 'main']
-        if cleaned_summary and cleaned_summary not in generic_summary_terms:
-            return cleaned_summary
     
-    # Final Fallback: Use NLTK for better noun extraction - IMPROVED
-    nltk_result = extract_nouns_from_text(text)
-    if nltk_result != "item":  # Only use if NLTK found something specific
-        return nltk_result
+    if cleaned in obvious_non_products:
+        return None
     
-    # Ultimate fallback for truly generic complaints
-    return "product"
-
+    
+    if len(cleaned) < 2 or len(cleaned) > 50:
+        return None
+    
+    
+    return cleaned
 async def extract_specific_item_from_category(text, category, headers):
-    """Extract specific item within a product category using QA."""
-    qa_url = "https://api-inference.huggingface.co/models/deepset/roberta-base-squad2"
-    qa_payload = {
-        "inputs": {
-            "question": f"What specific item (e.g., 'sling bag', 'iphone', 'chair', 'ceramic vase') related to a '{category}' is mentioned?",
-            "context": text
+    """Extract a more specific item name within a given category using AI."""
+    try:
+        
+        qa_url = "https://api-inference.huggingface.co/models/deepset/roberta-base-squad2"
+        qa_payload = {
+            "inputs": {
+                "question": f"What specific {category} is being discussed? Answer with just the specific item name.",
+                "context": text
+            }
         }
+        
+        start_time = time.perf_counter()
+        result = await asyncio.to_thread(_call_hf_api_sync, qa_url, headers, qa_payload)
+        end_time = time.perf_counter()
+        print(f"[Specific Item Extraction] API call took {end_time - start_time:.2f} seconds")
+        
+        if result and isinstance(result, dict) and 'answer' in result:
+            answer = result['answer'].strip()
+            confidence = result.get('score', 0)
+            print(f"[Specific Item Extraction] Answer: '{answer}', Score: {confidence:.2f}")
+            
+            # Clean and validate the answer
+            cleaned_item = clean_product_name(answer)
+            if cleaned_item and confidence > 0.4 and cleaned_item != category:
+                return cleaned_item
+        
+        category_patterns = {
+            'bag': [r'\b(leather|canvas|tote|shoulder|crossbody|messenger|backpack|handbag|purse|sling|duffel|clutch)\s+bag\b'],
+            'jewelry': [r'\b(gold|silver|diamond|pearl|chain|pendant|charm|tennis|statement)\s+(necklace|bracelet|ring|earrings)\b'],
+            'clothing': [r'\b(cotton|silk|wool|denim|leather|casual|formal|summer|winter)\s+(shirt|dress|pants|jacket|blouse|top)\b'],
+            'shoes': [r'\b(running|dress|casual|leather|canvas|high|low|ankle|knee)\s+(shoes|boots|sneakers|sandals|heels)\b'],
+            'watch': [r'\b(digital|analog|smart|leather|metal|sport|dress|chronograph)\s+watch\b'],
+            'electronic device': [r'\b(smartphone|laptop|tablet|camera|headphones|earbuds|speaker|charger|cable)\b'],
+            'furniture': [r'\b(dining|office|lounge|recliner|swivel|wooden|metal|leather)\s+(chair|table|desk|sofa|bed)\b'],
+            'kitchen appliance': [r'\b(coffee|espresso|stand|hand|food|immersion)\s+(maker|blender|mixer|processor)\b'],
+            'home decor': [r'\b(table|floor|desk|ceiling|wall|decorative|ceramic|glass|crystal)\s+(lamp|vase|mirror|frame)\b']
+        }
+        
+        if category in category_patterns:
+            text_lower = text.lower()
+            for pattern in category_patterns[category]:
+                match = re.search(pattern, text_lower)
+                if match:
+                    matched_text = match.group(0)
+                    cleaned_match = clean_product_name(matched_text)
+                    if cleaned_match:
+                        return cleaned_match
+        
+        # If no specific item found, return None to use the category
+        return None
+        
+    except Exception as e:
+        print(f"[Specific Item Extraction] Error: {e}")
+        return None
+def extract_product_from_keywords(text):
+    """Extract product using keyword matching and patterns."""
+    text_lower = text.lower()
+    
+    # Define specific product keywords with their clean names
+    product_keywords = {
+        # Bags and accessories
+        'bag': ['bag', 'bags', 'handbag', 'purse', 'backpack', 'tote', 'suitcase', 'luggage'],
+        'wallet': ['wallet', 'wallets', 'purse'],
+        'watch': ['watch', 'watches', 'timepiece'],
+        
+        # Electronics
+        'phone': ['phone', 'smartphone', 'mobile', 'iphone', 'android'],
+        'laptop': ['laptop', 'computer', 'notebook computer', 'macbook'],
+        'tablet': ['tablet', 'ipad'],
+        'headphones': ['headphones', 'earphones', 'earbuds', 'airpods'],
+        'camera': ['camera', 'digital camera'],
+        
+        # Clothing
+        'shirt': ['shirt', 'blouse', 't-shirt', 'tshirt', 'top'],
+        'dress': ['dress', 'gown', 'frock'],
+        'pants': ['pants', 'trousers', 'jeans', 'slacks'],
+        'jacket': ['jacket', 'coat', 'blazer'],
+        'shoes': ['shoes', 'boots', 'sneakers', 'sandals', 'heels'],
+        
+        # Jewelry
+        'necklace': ['necklace', 'chain', 'pendant'],
+        'earrings': ['earrings', 'earring'],
+        'bracelet': ['bracelet', 'bangle'],
+        'ring': ['ring', 'wedding ring'],
+        
+        # Home items
+        'vase': ['vase', 'flower vase', 'decorative vase'],
+        'lamp': ['lamp', 'light', 'table lamp'],
+        'chair': ['chair', 'seat', 'armchair'],
+        'table': ['table', 'desk', 'dining table'],
+        'mirror': ['mirror', 'looking glass'],
+        
+        # Kitchen
+        'blender': ['blender', 'mixer'],
+        'toaster': ['toaster', 'toaster oven'],
+        'microwave': ['microwave', 'microwave oven'],
+        
+        # Beauty
+        'makeup': ['makeup', 'cosmetics', 'foundation', 'lipstick', 'mascara'],
+        'perfume': ['perfume', 'fragrance', 'cologne'],
+        'shampoo': ['shampoo', 'conditioner', 'hair product'],
+        
+        # Books and media
+        'book': ['book', 'novel', 'textbook', 'ebook'],
+        'magazine': ['magazine', 'journal', 'periodical'],
+        
+        # General categories that need more specificity
+        'jewelry': ['jewelry', 'jewellery', 'ornament'],
+        'clothing': ['clothing', 'clothes', 'apparel', 'garment'],
+        'furniture': ['furniture', 'furnishing']
     }
-    start_time_specific_qa = time.perf_counter()
-    qa_result = await asyncio.to_thread(_call_hf_api_sync, qa_url, headers, qa_payload)
-    end_time_specific_qa = time.perf_counter()
-    print(f"[Specific Item from Category QA] API call took {end_time_specific_qa - start_time_specific_qa:.2f} seconds")
+    
+    # Look for specific product mentions
+    for clean_name, keywords in product_keywords.items():
+        for keyword in keywords:
+            if keyword in text_lower:
+                return clean_name
+    
+    # Pattern matching for products
+    patterns = [
+        r'\b(sling\s+bag|shoulder\s+bag|crossbody\s+bag|leather\s+bag)\b',
+        r'\b(leather\s+wallet|men\'?s\s+wallet|women\'?s\s+wallet)\b',
+        r'\b(smart\s+watch|digital\s+watch|wrist\s+watch)\b',
+        r'\b(ceramic\s+vase|glass\s+vase|flower\s+vase)\b',
+        r'\b(office\s+chair|dining\s+chair|arm\s+chair)\b',
+        r'\b(coffee\s+table|dining\s+table|side\s+table)\b',
+        r'\b(gold\s+necklace|silver\s+necklace|pearl\s+necklace)\b',
+        r'\b(running\s+shoes|dress\s+shoes|casual\s+shoes)\b',
+        r'\b(denim\s+jacket|leather\s+jacket|winter\s+jacket)\b',
+        r'\b(summer\s+dress|evening\s+dress|casual\s+dress)\b'
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text_lower, re.IGNORECASE)
+        if match:
+            matched_text = match.group(0)
+            # Extract the main product name from the matched text
+            if 'bag' in matched_text:
+                return 'bag'
+            elif 'wallet' in matched_text:
+                return 'wallet'
+            elif 'watch' in matched_text:
+                return 'watch'
+            elif 'vase' in matched_text:
+                return 'vase'
+            elif 'chair' in matched_text:
+                return 'chair'
+            elif 'table' in matched_text:
+                return 'table'
+            elif 'necklace' in matched_text:
+                return 'necklace'
+            elif 'shoes' in matched_text:
+                return 'shoes'
+            elif 'jacket' in matched_text:
+                return 'jacket'
+            elif 'dress' in matched_text:
+                return 'dress'
+    
+    return None
 
-    if qa_result and isinstance(qa_result, dict) and 'answer' in qa_result:
-        answer = qa_result['answer'].strip().lower()
-        confidence = qa_result.get('score', 0)
-        print(f"[Specific Item from Category QA] Answer: '{answer}', Score: {confidence:.2f}")
-        generic_terms = ['it', 'this', 'that', 'item', 'product', 'thing', 'bag', 'service']
-        if confidence > 0.35 and len(answer) > 2 and len(answer) < 30 and answer not in generic_terms:
-            cleaned_answer = re.sub(r'^(my|the|a|an)\s+', '', answer).strip()
-            if cleaned_answer:
-                return cleaned_answer
+def clean_product_name(raw_name):
+    """Clean and validate product name to ensure it's a proper product name."""
+    if not raw_name:
+        return None
+    
+    # Convert to lowercase for processing
+    cleaned = raw_name.lower().strip()
+    
+    # Remove common prefixes and articles
+    prefixes_to_remove = [
+        'the ', 'a ', 'an ', 'my ', 'your ', 'his ', 'her ', 'its ', 'our ', 'their ',
+        'this ', 'that ', 'these ', 'those ', 'some ', 'any ', 'each ', 'every ',
+        'i ordered ', 'i bought ', 'i purchased ', 'i received ', 'i got ',
+        'we ordered ', 'we bought ', 'we purchased ', 'we received ', 'we got ',
+        'customer ordered ', 'customer bought ', 'customer purchased ',
+        'complaint about ', 'problem with ', 'issue with ', 'trouble with ',
+        'defective ', 'broken ', 'damaged ', 'faulty ', 'wrong ', 'incorrect ',
+        'missing ', 'late ', 'delayed ', 'poor quality ', 'cheap ', 'fake '
+    ]
+    
+    for prefix in prefixes_to_remove:
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):].strip()
+            break
+    
+    # Remove common suffixes
+    suffixes_to_remove = [
+        ' item', ' product', ' thing', ' object', ' piece', ' unit',
+        ' service', ' order', ' purchase', ' delivery', ' shipment',
+        ' that i ordered', ' that i bought', ' that i purchased',
+        ' that was ordered', ' that was bought', ' that was purchased',
+        ' from your store', ' from your company', ' from you',
+        ' is broken', ' is damaged', ' is defective', ' is wrong',
+        ' doesn\'t work', ' won\'t work', ' not working', ' malfunctioning'
+    ]
+    
+    for suffix in suffixes_to_remove:
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[:-len(suffix)].strip()
+            break
+    
+    # Remove extra whitespace and special characters
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    cleaned = re.sub(r'[^\w\s-]', '', cleaned)
+    cleaned = cleaned.strip()
+    
+    # Filter out generic terms and gibberish
+    generic_terms = {
+        'it', 'this', 'that', 'item', 'product', 'thing', 'object', 'piece',
+        'service', 'order', 'purchase', 'delivery', 'shipment', 'package',
+        'stuff', 'goods', 'merchandise', 'article', 'unit', 'component',
+        'part', 'element', 'material', 'substance', 'matter', 'content',
+        'customer', 'complaint', 'problem', 'issue', 'trouble', 'concern',
+        'question', 'inquiry', 'request', 'message', 'email', 'communication',
+        'experience', 'situation', 'case', 'instance', 'example', 'sample',
+        'quality', 'condition', 'state', 'status', 'situation', 'circumstance',
+        'business', 'company', 'store', 'shop', 'vendor', 'seller', 'supplier',
+        'brand', 'manufacturer', 'producer', 'maker', 'creator', 'provider'
+    }
+
+    if cleaned in generic_terms:
+        return None
+    
+    if len(cleaned) < 2 or len(cleaned) > 30:
+        return None
+   
+    if len(re.findall(r'\d', cleaned)) > len(cleaned) * 0.5:
+        return None
+    
+    words = cleaned.split()
+    if len(words) > 4:
+        sentence_indicators = ['and', 'or', 'but', 'with', 'from', 'to', 'for', 'in', 'on', 'at', 'by', 'is', 'was', 'are', 'were', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'can', 'may', 'might', 'must']
+        if any(word in sentence_indicators for word in words):
+         
+            main_noun = extract_main_noun_from_sentence(cleaned)
+            if main_noun:
+                return main_noun
+            return None
+    
+    return cleaned
+
+def extract_main_noun_from_sentence(sentence):
+    """Extract the main product noun from a sentence."""
+    try:
+        tokens = nltk.word_tokenize(sentence)
+        tagged = nltk.pos_tag(tokens)
+        
+        # Look for nouns, prioritizing those that come first or are more specific
+        nouns = []
+        for word, pos in tagged:
+            if pos.startswith('NN') and len(word) > 2:
+                nouns.append(word.lower())
+        
+        # Filter out common non-product nouns
+        product_nouns = []
+        non_product_nouns = {
+            'problem', 'issue', 'trouble', 'concern', 'complaint', 'question',
+            'order', 'purchase', 'delivery', 'shipment', 'package', 'service',
+            'quality', 'condition', 'experience', 'situation', 'case', 'time',
+            'money', 'price', 'cost', 'payment', 'refund', 'return', 'exchange',
+            'customer', 'person', 'people', 'staff', 'employee', 'manager',
+            'company', 'store', 'shop', 'business', 'brand', 'manufacturer',
+            'day', 'week', 'month', 'year', 'date', 'time', 'moment', 'period'
+        }
+        
+        for noun in nouns:
+            if noun not in non_product_nouns:
+                product_nouns.append(noun)
+        
+        # Return the first product noun found
+        if product_nouns:
+            return product_nouns[0]
+        
+    except Exception as e:
+        print(f"Error extracting main noun: {e}")
     
     return None
 
 def extract_nouns_from_text(text):
     """Extract potential product nouns from text using NLTK as final fallback."""
-    tokens = nltk.word_tokenize(text.lower())
-    tagged = nltk.pos_tag(tokens)
+    try:
+        tokens = nltk.word_tokenize(text.lower())
+        tagged = nltk.pos_tag(tokens)
+        
+        nouns = [word for word, pos in tagged if pos.startswith('NN')]
+        
+        # Enhanced stop words list
+        stop_words = {
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
+            'is', 'was', 'were', 'are', 'been', 'be', 'have', 'has', 'had', 'do', 'does', 'did',
+            'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that',
+            'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her',
+            'us', 'them', 'my', 'your', 'his', 'her', 'its', 'our', 'their', 'order', 'ordered',
+            'need', 'free', 'correct', 'immediately', 'not', 'color', 'wrong', 'issue', 'problem',
+            'customer', 'service', 'received', 'delivered', 'yesterday', 'today', 'product', 'item',
+            'thing', 'chain', 'delivery', 'shipment', 'package', 'purchase', 'quality', 'condition',
+            'experience', 'situation', 'complaint', 'concern', 'trouble', 'difficulty', 'money',
+            'price', 'cost', 'payment', 'refund', 'return', 'exchange', 'time', 'day', 'week',
+            'month', 'year', 'date', 'moment', 'period', 'company', 'store', 'shop', 'business',
+            'brand', 'manufacturer', 'staff', 'employee', 'manager', 'person', 'people'
+        }
+        
+        potential_products = []
+        for word in nouns:
+            if (word not in stop_words and 
+                len(word) > 2 and 
+                not word.isdigit() and 
+                not re.match(r'^[A-Z0-9-]+$', word)):  # Avoid order numbers
+                potential_products.append(word)
+        
+        # Return the first valid product noun
+        if potential_products:
+            return potential_products[0]
+        
+    except Exception as e:
+        print(f"Error in NLTK noun extraction: {e}")
     
-    nouns = [word for word, pos in tagged if pos.startswith('NN')]
-    
-    stop_words = {
-        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'was', 'were', 'are', 'been', 'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them', 'my', 'your', 'his', 'her', 'its', 'our', 'their', 'order', 'ordered', 'need', 'free', 'correct', 'immediately', 'not', 'was', 'color', 'wrong', 'issue', 'problem', 'customer', 'service', 'received', 'delivered', 'yesterday', 'today', 'bag',
-        'product', 'item', 'thing', 'chain', # Add 'chain' here to ensure it's not picked up as the *main product* if it's just a component
-        'my', 'your', 'his', 'her', 'its'
-    }
-    
-    potential_products = []
-    for word in nouns:
-        if word not in stop_words and len(word) > 2:
-            potential_products.append(word)
-    
-    if potential_products:
-        return potential_products[0]
-    
-    return "item"
+    return None
 
 async def analyze_customer_sentiment(text, headers):
     """
@@ -657,8 +1068,7 @@ async def analyze_customer_sentiment(text, headers):
             if keyword in text_lower:
                 score += indicators['weight']
                 matches.append(keyword)
-        
-        # Check patterns
+  
         for pattern in indicators['patterns']:
             if re.search(pattern, text_lower, re.IGNORECASE):
                 score += indicators['weight'] * 1.2  # Patterns get slight boost
@@ -670,15 +1080,15 @@ async def analyze_customer_sentiment(text, headers):
             'weight': indicators['weight']
         }
     
-    # Determine primary sentiment
+
     max_score = max(sentiment_scores.values(), key=lambda x: x['score'])['score']
     primary_sentiment = max(sentiment_scores.keys(), key=lambda x: sentiment_scores[x]['score'])
     
-    # Calculate confidence based on score difference
+
     sorted_scores = sorted(sentiment_scores.items(), key=lambda x: x[1]['score'], reverse=True)
     confidence = min(0.95, max(0.3, (sorted_scores[0][1]['score'] - sorted_scores[1][1]['score']) / 3))
     
-    # Contextual adjustments
+
     context_adjustments = {
         'urgency_boost': ['urgent', 'immediately', 'asap', 'right now', 'emergency'],
         'politeness_boost': ['please', 'kindly', 'would appreciate', 'thank you'],
@@ -686,7 +1096,6 @@ async def analyze_customer_sentiment(text, headers):
         'severity_boost': ['completely', 'totally', 'absolutely', 'extremely', 'utterly']
     }
     
-    # Apply contextual adjustments
     if any(word in text_lower for word in context_adjustments['urgency_boost']):
         if primary_sentiment in ['moderately_negative', 'very_negative']:
             confidence += 0.1
@@ -699,7 +1108,7 @@ async def analyze_customer_sentiment(text, headers):
         if primary_sentiment in ['very_negative', 'extremely_negative']:
             confidence += 0.15
     
-    # Use AI model for validation if score is close or confidence is low
+   
     ai_sentiment = None
     ai_confidence = 0
     
@@ -724,8 +1133,7 @@ async def analyze_customer_sentiment(text, headers):
                 
                 ai_sentiment = sentiment_mapping.get(best_sentiment['label'], 'neutral_negative')
                 ai_confidence = best_sentiment['score']
-                
-                # Blend rule-based and AI results
+         
                 if ai_confidence > 0.8:
                     primary_sentiment = ai_sentiment
                     confidence = ai_confidence
@@ -736,7 +1144,7 @@ async def analyze_customer_sentiment(text, headers):
         except Exception as e:
             print(f"AI sentiment analysis failed: {e}")
     
-    # Map to final sentiment categories
+ 
     final_sentiment_mapping = {
         'extremely_negative': 'angry',
         'very_negative': 'frustrated',
@@ -747,7 +1155,7 @@ async def analyze_customer_sentiment(text, headers):
     
     final_sentiment = final_sentiment_mapping.get(primary_sentiment, 'neutral')
     
-    # Determine emotion based on sentiment and context
+
     emotion_mapping = {
         'angry': 'extremely_frustrated',
         'frustrated': 'very_frustrated', 
@@ -775,8 +1183,7 @@ def generate_enhanced_human_readable_summary(text, analysis, key_info):
     Enhanced summary generation with better sentiment understanding
     """
     text_lower = text.lower()
-    
-    # More nuanced emotion descriptions based on enhanced sentiment analysis
+  
     emotion_descriptions = {
         'angry': 'extremely frustrated and demanding immediate action',
         'frustrated': 'very frustrated and seeking prompt resolution',
@@ -784,8 +1191,7 @@ def generate_enhanced_human_readable_summary(text, analysis, key_info):
         'neutral': 'matter-of-fact in their communication',
         'polite': 'professional and courteous despite the issue'
     }
-    
-    # Enhanced resolution detection
+
     resolution_patterns = {
         'immediate_replacement': ['replacement immediately', 'replace right now', 'new one asap'],
         'urgent_replacement': ['replacement', 'replace', 'new one', 'exchange'],
@@ -803,8 +1209,7 @@ def generate_enhanced_human_readable_summary(text, analysis, key_info):
     for resolution_type, keywords in resolution_patterns.items():
         if any(keyword in text_lower for keyword in keywords):
             desired_resolutions.append(resolution_type)
-    
-    # Determine primary resolution request
+  
     if not desired_resolutions:
         if analysis['sentiment'] in ['angry', 'frustrated']:
             primary_resolution = 'immediate_action'
@@ -814,8 +1219,7 @@ def generate_enhanced_human_readable_summary(text, analysis, key_info):
             primary_resolution = 'assistance'
     else:
         primary_resolution = desired_resolutions[0]
-    
-    # Resolution text mapping
+  
     resolution_text = {
         'immediate_replacement': 'an immediate replacement',
         'urgent_replacement': 'a replacement as soon as possible',
@@ -832,7 +1236,6 @@ def generate_enhanced_human_readable_summary(text, analysis, key_info):
         'assistance': 'assistance with their concern'
     }
     
-    # Enhanced urgency detection
     urgency_phrases = {
         'critical': ['emergency', 'urgent', 'immediately', 'right now', 'asap', 'critical'],
         'high': ['soon', 'quickly', 'prompt', 'fast', 'priority', 'time sensitive'],
@@ -846,12 +1249,12 @@ def generate_enhanced_human_readable_summary(text, analysis, key_info):
             detected_urgency = urgency_level
             break
     
-    # Build enhanced summary
+
     product_name = analysis["product"]
     emotion_desc = emotion_descriptions.get(analysis['sentiment'], 'neutral in their communication')
     resolution_desc = resolution_text.get(primary_resolution, 'a resolution to their issue')
     
-    # Issue description with more context
+
     issue_descriptions = {
         'wrong_item': f'they received the wrong {product_name}',
         'product_defect': f'their {product_name} has a quality defect or damage',
@@ -864,7 +1267,7 @@ def generate_enhanced_human_readable_summary(text, analysis, key_info):
         'general_inquiry': f'they have a question about their {product_name}'
     }
     
-    # Add specific details based on text analysis
+   
     specific_details = ""
     if analysis['category'] == 'product_defect':
         defect_keywords = {
@@ -877,9 +1280,7 @@ def generate_enhanced_human_readable_summary(text, analysis, key_info):
         for defect_type, keywords in defect_keywords.items():
             if any(keyword in text_lower for keyword in keywords):
                 specific_details = f" ({defect_type})"
-                break
-    
-    # Contact history detection
+
     contact_history = ""
     if 'contacted' in text_lower or 'called' in text_lower or 'emailed' in text_lower:
         if any(word in text_lower for word in ['multiple', 'several', 'many', 'numerous']):
@@ -889,7 +1290,6 @@ def generate_enhanced_human_readable_summary(text, analysis, key_info):
         else:
             contact_history = " They have previously contacted support about this matter."
     
-    # Build final summary
     issue_desc = issue_descriptions.get(analysis['category'], f'they have an issue with their {product_name}') + specific_details
     
     urgency_modifier = ""
@@ -903,8 +1303,7 @@ def generate_enhanced_human_readable_summary(text, analysis, key_info):
         f"They are {emotion_desc}.{contact_history} "
         f"They are requesting {urgency_modifier}{resolution_desc}"
     )
-    
-    # Add order reference if available
+
     if key_info.get('order_numbers'):
         summary += f" for order {key_info['order_numbers'][0]}"
     
@@ -912,7 +1311,7 @@ def generate_enhanced_human_readable_summary(text, analysis, key_info):
     
     return summary
 
-# Update the main analyze_with_ai_classification function to use enhanced sentiment
+
 async def analyze_with_ai_classification(text):
     """Enhanced AI classification with improved sentiment analysis."""
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
@@ -927,13 +1326,13 @@ async def analyze_with_ai_classification(text):
         'emotion': 'neutral'
     }
 
-    # Use enhanced sentiment analysis
+
     sentiment_result = await analyze_customer_sentiment(text, headers)
     analysis_results['sentiment'] = sentiment_result['sentiment']
     analysis_results['sentiment_confidence'] = sentiment_result['confidence']
     analysis_results['emotion'] = sentiment_result['emotion']
     
-    # Rest of the function remains the same for category and product extraction
+   
     category_url = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
     category_labels = [
         "wrong item received or incorrect product",
@@ -947,7 +1346,7 @@ async def analyze_with_ai_classification(text):
         "general inquiry or question"
     ]
 
-    # Create tasks for concurrent execution
+    
     product_task = extract_product_with_ai(text)
     category_task = asyncio.to_thread(_call_hf_api_sync, category_url, headers, 
                                      {"inputs": text, "parameters": {"candidate_labels": category_labels}})
@@ -957,7 +1356,7 @@ async def analyze_with_ai_classification(text):
     end_time_concurrent = time.perf_counter()
     print(f"[Concurrent AI Analysis] Product and category extraction took {end_time_concurrent - start_time_concurrent:.2f} seconds")
 
-    # Process results
+  
     analysis_results['product'] = product_result
     
     if category_response_json and 'labels' in category_response_json:
@@ -976,7 +1375,7 @@ async def analyze_with_ai_classification(text):
         analysis_results['category'] = category_mapping.get(top_category, 'general_inquiry')
         analysis_results['category_confidence'] = category_response_json['scores'][0]
 
-    # Enhanced urgency detection
+    
     urgency_indicators = {
         'critical': ['urgent', 'immediately', 'asap', 'emergency', 'critical', 'right now'],
         'high': ['soon', 'quickly', 'prompt', 'fast', 'expedite', 'priority'],
@@ -999,7 +1398,7 @@ async def generate_email_response(text, analysis, key_info):
     greeting_templates = {
     'angry': 'We sincerely apologize for this frustrating experience and understand your urgency regarding your {product}.',
     'disappointed': 'We understand your disappointment regarding your {product} and want to resolve this matter promptly.',
-    # 'mildly_negative': 'Thank you for bringing the issue with your {product} to our attention.', # You can remove or comment this line
+    
     'polite': 'Thank you for your patience and for contacting us professionally regarding your {product}.',
     'neutral': 'Thank you for reaching out to us regarding your recent experience with your {product}.'
 }
@@ -1051,8 +1450,7 @@ async def summarize(complaint: ComplaintRequest):
     text = complaint.text.strip()
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     
-    start_total_time = time.perf_counter() # Start overall timing
-
+    start_total_time = time.perf_counter() 
     if len(text.split()) < 3:
         print("Input text too short.")
         return {
@@ -1066,7 +1464,6 @@ async def summarize(complaint: ComplaintRequest):
             "key_info": {}
         }
     
-    # Gracefully handle non-complaint text using the improved function
     start_validation_time = time.perf_counter()
     is_complaint = await is_valid_complaint(text, headers)
     end_validation_time = time.perf_counter()
@@ -1179,7 +1576,7 @@ async def respond(complaint: ComplaintRequest):
     text = complaint.text.strip()
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
-    start_total_time = time.perf_counter() # Start overall timing
+    start_total_time = time.perf_counter() 
 
     if len(text.split()) < 3:
         print("Input text too short for response generation.")
@@ -1245,7 +1642,7 @@ async def respond(complaint: ComplaintRequest):
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "version": "2.3"} # Updated version
+    return {"status": "healthy", "version": "2.3"} 
 
 if __name__ == "__main__":
     import uvicorn
